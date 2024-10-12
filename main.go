@@ -10,6 +10,33 @@ import (
 	"github.com/gorilla/mux"
 )
 
+// Логгер и метод инициализации
+var logger TransactionLogger
+
+func initializeTransactionLog() error {
+	var err error
+	logger, err = NewFileTransactionLogger("transaction.log")
+	if err != nil {
+		return fmt.Errorf("failed to create event logger: %w", err)
+	}
+	events, errors := logger.ReadEvents()
+	e, ok := Event{}, true
+	for ok && err == nil {
+		select {
+		case err, ok = <-errors: // Получает ошибки
+		case e, ok = <-events:
+			switch e.EventType {
+			case EventDelete: // Получено событие DELETE!
+				err = Delete(e.Key)
+			case EventPut: // Получено событие PUT!
+				err = Put(e.Key, e.Value)
+			}
+		}
+	}
+	logger.Run()
+	return err
+}
+
 // keyValuePutHandler ожидает получить PUT-запрос с ресурсом
 // "/v1/key/{key}".
 
@@ -26,6 +53,8 @@ func keyValuePutHandler(w http.ResponseWriter, r *http.Request) {
 			http.StatusInternalServerError)
 		return
 	}
+
+	logger.WritePut(key, string(value)) // Пишем в журнал
 
 	err = Put(key, string(value))
 	if err != nil {
@@ -58,8 +87,11 @@ func keyValueGetHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func keyValueDeleteHandler(w http.ResponseWriter, r *http.Request) {
+
 	vars := mux.Vars(r) // Извлечь ключ из запроса
 	key := vars["key"]
+
+	logger.WriteDelete(key) // Пишем в журнал
 
 	err := Delete(key)
 	if err != nil {
@@ -73,6 +105,8 @@ func testovich(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+
+	initializeTransactionLog()
 	r := mux.NewRouter()
 
 	// зарегистрировать keyValuePutHandler как обработчик HTTP-запросов PUT,
